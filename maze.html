@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>迷宫小游戏（流畅滑行 + 响应式布局）</title>
+<style>
+  body {
+    background: #111;
+    color: #eee;
+    font-family: sans-serif;
+    text-align: center;
+    margin: 0;
+    padding: 0;
+  }
+
+  canvas {
+    background: #222;
+    display: block;
+    margin: 10px auto;
+    width: 90vw;          /* 响应式宽度 */
+    height: 90vw;         /* 保持正方形 */
+    max-width: 600px;
+    max-height: 600px;
+  }
+
+  .controls {
+    margin: 15px auto;
+    width: 180px;
+    display: grid;
+    grid-template-columns: 60px 60px 60px;
+    grid-template-rows: 60px 60px 60px;
+    justify-content: center;
+    align-items: center;
+    gap: 5px;
+  }
+
+  .btn {
+    background: #444;
+    color: white;
+    border: 1px solid #666;
+    font-size: 24px;
+    user-select: none;
+    cursor: pointer;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    border-radius: 8px;
+    transition: background 0.2s;
+  }
+
+  .btn:active {
+    background: #666;
+  }
+
+  #info {
+    margin-top: 10px;
+    font-size: 16px;
+    line-height: 1.6;
+  }
+
+  button.btn {
+    width: 150px;
+    height: 45px;
+    margin-top: 10px;
+  }
+</style>
+</head>
+<body>
+<h2>迷宫小游戏 🧩（滑动对齐格子）</h2>
+<canvas id="game" width="600" height="600"></canvas>
+
+<div id="info">
+  ⏱️ 时间：<span id="timer">0.0</span> 秒 ｜ 
+  🧩 关卡：<span id="level">1</span> ｜ 
+  💯 当前得分：<span id="score">0</span> ｜ 
+  🏆 总分：<span id="totalScore">0</span>
+</div>
+
+<div class="controls">
+  <div></div>
+  <div class="btn" id="up">↑</div>
+  <div></div>
+  <div class="btn" id="left">←</div>
+  <div></div>
+  <div class="btn" id="right">→</div>
+  <div></div>
+  <div class="btn" id="down">↓</div>
+  <div></div>
+</div>
+
+<button class="btn" onclick="restart()">重新开始</button>
+
+<script>
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+
+let cols, rows, size;
+let maze, player, exit;
+let level = 1;
+let timer = 0, timerId = null, gameOver = false;
+let score = 0, totalScore = 0;
+let pathTrail = []; 
+let currentDir = null;
+let slideSpeed = 0.2;
+
+// --- 迷宫生成 ---
+function initMaze() {
+  maze = Array.from({ length: rows }, () => Array(cols).fill(1));
+}
+
+function generateMaze(x, y) {
+  const stack = [[x, y]];
+  maze[y][x] = 0;
+  const dirs = [[0,-1],[1,0],[0,1],[-1,0]];
+  while(stack.length){
+    const [cx, cy] = stack[stack.length-1];
+    const shuffled = dirs.sort(() => Math.random()-0.5);
+    let carved=false;
+    for(const [dx,dy] of shuffled){
+      const nx=cx+dx*2;
+      const ny=cy+dy*2;
+      if(ny>0 && ny<rows-1 && nx>0 && nx<cols-1 && maze[ny][nx]===1){
+        maze[cy+dy][cx+dx]=0;
+        maze[ny][nx]=0;
+        stack.push([nx,ny]);
+        carved=true; break;
+      }
+    }
+    if(!carved) stack.pop();
+  }
+  for(let i=0;i<Math.floor(cols*rows*0.04);i++){
+    const rx=Math.floor(Math.random()*(cols-2))+1;
+    const ry=Math.floor(Math.random()*(rows-2))+1;
+    if(maze[ry][rx]===1) maze[ry][rx]=0;
+  }
+  maze[1][1]=0;
+}
+
+function findExit(){
+  for(let r=0;r<Math.max(cols,rows);r++){
+    for(let dy=-r;dy<=r;dy++){
+      for(let dx=-r;dx<=r;dx++){
+        const x=cols-2-dx; const y=rows-2-dy;
+        if(x>0 && y>0 && x<cols-1 && y<rows-1 && maze[y][x]===0) return {x,y};
+      }
+    }
+  }
+  return {x:cols-2,y:rows-2};
+}
+
+// --- 绘制 ---
+function drawMaze(){
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  for(let y=0;y<rows;y++){
+    for(let x=0;x<cols;x++){
+      if(maze[y][x]===1){
+        ctx.fillStyle='#555';
+        ctx.fillRect(x*size,y*size,size,size);
+      }
+    }
+  }
+  ctx.fillStyle='rgba(255,0,0,0.3)';
+  pathTrail.forEach(p=>{
+    ctx.fillRect(p.x*size,p.y*size,size,size);
+  });
+  ctx.fillStyle='green';
+  ctx.fillRect(exit.x*size,exit.y*size,size,size);
+  ctx.fillStyle='red';
+  ctx.fillRect(player.animX*size,player.animY*size,size,size);
+}
+
+// --- 滑动移动 ---
+function isWalkable(x,y){
+  const cx=Math.floor(x);
+  const cy=Math.floor(y);
+  if(cx<0||cy<0||cx>=cols||cy>=rows) return false;
+  return maze[cy][cx]===0;
+}
+
+function startSliding(dx,dy){
+  if(gameOver) return;
+  currentDir={dx,dy};
+  requestAnimationFrame(slideStep);
+}
+
+function stopSliding() {
+  if(!currentDir) return;
+  currentDir=null;
+  player.animX = player.x;
+  player.animY = player.y;
+  drawMaze();
+}
+
+function slideStep(){
+  if(!currentDir || gameOver) return;
+  let nx=player.animX+currentDir.dx*slideSpeed;
+  let ny=player.animY+currentDir.dy*slideSpeed;
+  nx = Math.max(0, Math.min(nx, cols-1));
+  ny = Math.max(0, Math.min(ny, rows-1));
+
+  if(isWalkable(nx,ny)){
+    player.animX=nx;
+    player.animY=ny;
+    const newX=Math.floor(nx);
+    const newY=Math.floor(ny);
+    if(newX!==player.x || newY!==player.y){
+      player.x=newX;
+      player.y=newY;
+      if(!pathTrail.some(p=>p.x===player.x && p.y===player.y)) pathTrail.push({x:player.x,y:player.y});
+      score++; document.getElementById('score').textContent=score;
+    }
+  } else {
+    stopSliding();
+  }
+
+  drawMaze();
+
+  if(player.x===exit.x && player.y===exit.y){
+    totalScore+=score;
+    clearInterval(timerId);
+    gameOver=true;
+    setTimeout(()=>{
+      alert(`🎉 通关！第 ${level} 关完成！\n用时 ${timer.toFixed(1)} 秒\n得分：${score}\n累计总分：${totalScore}`);
+      level++; nextLevel();
+    },200);
+    return;
+  }
+
+  if(currentDir) requestAnimationFrame(slideStep);
+}
+
+// --- 计时 ---
+function startTimer(){
+  timer=0; document.getElementById('timer').textContent=timer.toFixed(1);
+  clearInterval(timerId);
+  timerId=setInterval(()=>{ timer+=0.1; document.getElementById('timer').textContent=timer.toFixed(1); },100);
+}
+
+// --- 关卡 ---
+function startLevel(lv){
+  cols = rows = 8 + lv * 4; // 减慢增长速度
+  size = canvas.width / cols;
+  initMaze();
+  generateMaze(1,1);
+  exit = findExit();
+  player = {x:1,y:1,animX:1,animY:1};
+  pathTrail=[{x:1,y:1}];
+  score=0; gameOver=false;
+  document.getElementById('level').textContent=lv;
+  document.getElementById('score').textContent=score;
+  document.getElementById('totalScore').textContent=totalScore;
+  startTimer(); drawMaze();
+}
+
+function nextLevel(){ startLevel(level); }
+function restart(){ level=1; totalScore=0; startLevel(level); }
+
+// --- 键盘控制（防止页面滚动） ---
+document.addEventListener('keydown',e=>{
+  if(['ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.key)) {
+    e.preventDefault(); // ✅ 阻止页面滚动
+    if(e.key==='ArrowUp') startSliding(0,-1);
+    if(e.key==='ArrowDown') startSliding(0,1);
+    if(e.key==='ArrowLeft') startSliding(-1,0);
+    if(e.key==='ArrowRight') startSliding(1,0);
+  }
+});
+document.addEventListener('keyup',stopSliding);
+
+// --- 触屏控制 ---
+['up','down','left','right'].forEach(id=>{
+  const btn=document.getElementById(id);
+  btn.addEventListener('mousedown',()=>{ 
+    if(id==='up') startSliding(0,-1);
+    if(id==='down') startSliding(0,1);
+    if(id==='left') startSliding(-1,0);
+    if(id==='right') startSliding(1,0);
+  });
+  btn.addEventListener('mouseup',stopSliding);
+  btn.addEventListener('mouseleave',stopSliding);
+  btn.addEventListener('touchstart',e=>{
+    e.preventDefault();
+    if(id==='up') startSliding(0,-1);
+    if(id==='down') startSliding(0,1);
+    if(id==='left') startSliding(-1,0);
+    if(id==='right') startSliding(1,0);
+  });
+  btn.addEventListener('touchend',stopSliding);
+});
+
+// --- 监听窗口大小变化（动态自适应） ---
+window.addEventListener('resize', ()=>{
+  const rect = canvas.getBoundingClientRect();
+  canvas.width = rect.width;
+  canvas.height = rect.height;
+  size = canvas.width / cols;
+  drawMaze();
+});
+
+restart();
+</script>
+</body>
+</html>
